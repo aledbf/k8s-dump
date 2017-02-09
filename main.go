@@ -25,7 +25,6 @@ import (
 	restclient "k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
 	clientcmdapi "k8s.io/kubernetes/pkg/client/unversioned/clientcmd/api"
-	"k8s.io/kubernetes/pkg/kubectl"
 	"k8s.io/kubernetes/pkg/runtime"
 )
 
@@ -79,13 +78,12 @@ metadata:
 
 {{ template "iterate" . }}
 
-
 {{ define "iterate" }}
 {{ range $k, $v := .types }}
-{{- if ne (len $v.Items) 0 }}
+{{- if ne (len $v.Runtime.Items) 0 }}
 # {{ $k }}
-{{ range $item := $v.Items }}
-{{ objectToYaml $item }}
+{{ range $item := $v.Runtime.Items }}
+{{ objectToYaml $v.Kind $v.APIVersion $item }}
 
 ---
 {{ end }}
@@ -179,35 +177,100 @@ func dumpCluster(kubeClient *client.Clientset, output, namespace string, skipTyp
 	glog.Infof("done")
 }
 
-func newMappingFactoring() map[string]runtime.Object {
-	return map[string]runtime.Object{
-		"configmaps":               &api.ConfigMapList{},
-		"daemonsets":               &extensions.DaemonSetList{},
-		"deployments":              &extensions.DeploymentList{},
-		"endpoints":                &api.EndpointsList{},
-		"horizontalpodautoscalers": &autoscalingapiv1.HorizontalPodAutoscalerList{},
-		"ingresses":                &extensions.IngressList{},
-		"jobs":                     &batch.JobList{},
-		"limitranges":              &api.LimitRangeList{},
-		"networkpolicies":          &extensions.NetworkPolicyList{},
-		"persistentvolumeclaims":   &api.PersistentVolumeClaimList{},
-		"persistentvolumes":        &api.PersistentVolumeList{},
-		"podsecuritypolicies":      &extensions.PodSecurityPolicyList{},
-		"podtemplates":             &api.PodTemplateList{},
-		"replicasets":              &extensions.ReplicaSetList{},
-		"replicationcontrollers":   &api.ReplicationControllerList{},
-		"resourcequotas":           &api.ResourceQuotaList{},
-		"secrets":                  &api.SecretList{},
-		"services":                 &api.ServiceList{},
-		"statefulsets":             &apps.StatefulSetList{},
-		"storageclasses":           &storage.StorageClassList{},
-		"thirdpartyresources":      &extensions.ThirdPartyResourceList{},
+func newMappingFactoring() map[string]*k8sObject {
+	return map[string]*k8sObject{
+		"configmaps": &k8sObject{
+			Kind:    "ConfigMap",
+			Runtime: &api.ConfigMapList{},
+		},
+		"daemonsets": &k8sObject{
+			Kind:    "DaemonSet",
+			Runtime: &extensions.DaemonSetList{},
+		},
+		"deployments": &k8sObject{
+			Kind:    "Deployment",
+			Runtime: &extensions.DeploymentList{},
+		},
+		"endpoints": &k8sObject{
+			Kind:    "Endpoints",
+			Runtime: &api.EndpointsList{},
+		},
+		"horizontalpodautoscalers": &k8sObject{
+			Kind:    "ConfigMap",
+			Runtime: &autoscalingapiv1.HorizontalPodAutoscalerList{},
+		},
+		"ingresses": &k8sObject{
+			Kind:    "HorizontalPodAutoscaler",
+			Runtime: &extensions.IngressList{},
+		},
+		"jobs": &k8sObject{
+			Kind:    "Job",
+			Runtime: &batch.JobList{},
+		},
+		"limitranges": &k8sObject{
+			Kind:    "LimitRange",
+			Runtime: &api.LimitRangeList{},
+		},
+		"networkpolicies": &k8sObject{
+			Kind:    "NetworkPolicy",
+			Runtime: &extensions.NetworkPolicyList{},
+		},
+		"persistentvolumeclaims": &k8sObject{
+			Kind:    "PersistentVolumeClaim",
+			Runtime: &api.PersistentVolumeClaimList{},
+		},
+		"persistentvolumes": &k8sObject{
+			Kind:    "PersistentVolume",
+			Runtime: &api.PersistentVolumeList{},
+		},
+		"podsecuritypolicies": &k8sObject{
+			Kind:    "PodSecurityPolicy",
+			Runtime: &extensions.PodSecurityPolicyList{},
+		},
+		"podtemplates": &k8sObject{
+			Kind:    "PodTemplate",
+			Runtime: &api.PodTemplateList{},
+		},
+		"replicasets": &k8sObject{
+			Kind:    "ReplicaSet",
+			Runtime: &extensions.ReplicaSetList{},
+		},
+		"replicationcontrollers": &k8sObject{
+			Kind:    "ReplicationController",
+			Runtime: &api.ReplicationControllerList{},
+		},
+		"resourcequotas": &k8sObject{
+			Kind:    "ConfigMap",
+			Runtime: &api.ConfigMapList{},
+		},
+		"services": &k8sObject{
+			Kind:    "Service",
+			Runtime: &api.ServiceList{},
+		},
+		"statefulsets": &k8sObject{
+			Kind:    "StatefulSet",
+			Runtime: &apps.StatefulSetList{},
+		},
+		"storageclasses": &k8sObject{
+			Kind:    "StorageClass",
+			Runtime: &storage.StorageClassList{},
+		},
+		"thirdpartyresources": &k8sObject{
+			Kind:    "ThirdPartyResource",
+			Runtime: &extensions.ThirdPartyResourceList{},
+		},
 	}
 }
 
 var (
 	regex = regexp.MustCompile("(\\s*)resourceVersion: \"(\\d+)\"")
 )
+
+type k8sObject struct {
+	APIVersion string
+	Kind       string
+	Runtime    runtime.Object
+}
 
 // dumpNamespace extracts information about Kubernetes objects located in a
 // particular namespace.
@@ -219,8 +282,8 @@ func dumpNamespace(kubeClient *client.Clientset, ns, output string, skipTypes []
 	notFound := []string{}
 
 	t, err := text_template.New("dump").Funcs(text_template.FuncMap{
-		"objectToYaml": func(obj runtime.Object) string {
-			s, err := marshalYaml(obj)
+		"objectToYaml": func(kind, apiVersion string, obj runtime.Object) string {
+			s, err := marshalYaml(kind, apiVersion, obj)
 			if err != nil {
 				glog.Errorf("unexpected error converting object to yaml: %v", err)
 			}
@@ -239,20 +302,27 @@ func dumpNamespace(kubeClient *client.Clientset, ns, output string, skipTypes []
 		}
 
 		var rc restclient.Interface
+		var apiVersion string
 
 		switch objectType {
 		case "horizontalpodautoscalers":
 			rc = kubeClient.Autoscaling().RESTClient()
+			apiVersion = "extensions/v1beta1"
 		case "jobs":
 			rc = kubeClient.Batch().RESTClient()
+			apiVersion = "batch/v2alpha1"
 		case "statefulsets":
 			rc = kubeClient.Apps().RESTClient()
+			apiVersion = "apps/v1beta1"
 		case "storageclasses":
 			rc = kubeClient.Storage().RESTClient()
+			apiVersion = "storage.k8s.io/v1beta1"
 		case "daemonsets", "deployments", "ingresses", "networkpolicies", "podsecuritypolicies", "replicasets", "thirdpartyresources":
 			rc = kubeClient.Extensions().RESTClient()
+			apiVersion = "extensions/v1beta1"
 		default:
 			rc = kubeClient.Core().RESTClient()
+			apiVersion = "api/v1"
 		}
 
 		err = rc.Get().
@@ -260,7 +330,7 @@ func dumpNamespace(kubeClient *client.Clientset, ns, output string, skipTypes []
 			Resource(objectType).
 			VersionedParams(&api.ListOptions{}, api.ParameterCodec).
 			Do().
-			Into(result)
+			Into(result.Runtime)
 
 		if err != nil {
 			if !k8s_errors.IsNotFound(err) {
@@ -269,6 +339,7 @@ func dumpNamespace(kubeClient *client.Clientset, ns, output string, skipTypes []
 			notFound = append(notFound, fmt.Sprintf("there is no object of type %v in namespace %v", objectType, ns))
 		}
 
+		result.APIVersion = apiVersion
 		data[objectType] = result
 	}
 
@@ -298,13 +369,15 @@ func skipType(skip string, names []string) bool {
 
 // marshalYaml converts an instance of Object interface to a yaml representation
 // removing the field resourceVersion
-func marshalYaml(obj runtime.Object) (string, error) {
-	printer := &kubectl.YAMLPrinter{}
+func marshalYaml(kind, apiVersion string, obj runtime.Object) (string, error) {
+	printer := &YAMLPrinter{}
 	tmplBuf := new(bytes.Buffer)
 	err := printer.PrintObj(obj, tmplBuf)
 	if err != nil {
 		return "", err
 	}
 
+	tmplBuf.Write([]byte(fmt.Sprintf("kind: %v\n", kind)))
+	tmplBuf.Write([]byte(fmt.Sprintf("apiVersion: %v\n", apiVersion)))
 	return regex.ReplaceAllString(tmplBuf.String(), ""), nil
 }
