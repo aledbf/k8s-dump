@@ -1,7 +1,9 @@
 # k8s-dump
-Dump object from a running Kubernetes cluster
+Dump objects from a running Kubernetes cluster
 
-Options:
+**Build:** run `go build`
+
+**Options:**
 ```
 ./dump --help
       --alsologtostderr                  log to standard error as well as files

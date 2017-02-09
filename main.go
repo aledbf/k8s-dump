@@ -207,37 +207,10 @@ func newMappingFactoring() map[string]runtime.Object {
 
 var (
 	regex = regexp.MustCompile("(\\s*)resourceVersion: \"(\\d+)\"")
-
-	funcMap = text_template.FuncMap{
-		"objectToYaml": objectToYaml,
-	}
 )
 
-// dumpNamespace extracts information about Kubernetes objects
-//
-// The types are:
-//  configmaps
-//  daemonsets
-//  deployments
-//  endpoints
-//  horizontalpodautoscalers
-//  ingresses
-//  jobs
-//  limitranges
-//  networkpolicies
-//  persistentvolumeclaims
-//  persistentvolumes
-//  podsecuritypolicies
-//  podtemplates
-//  replicasets
-//  replicationcontrollers
-//  resourcequotas
-//  secrets
-//  services
-//  statefulsets
-//  storageclasses
-//  thirdpartyresources
-//
+// dumpNamespace extracts information about Kubernetes objects located in a
+// particular namespace.
 func dumpNamespace(kubeClient *client.Clientset, ns, output string, skipTypes []string) error {
 	glog.Infof("\tdumping namespace %v", ns)
 
@@ -245,13 +218,23 @@ func dumpNamespace(kubeClient *client.Clientset, ns, output string, skipTypes []
 	data := make(map[string]interface{})
 	notFound := []string{}
 
-	t, err := text_template.New("dump").Funcs(funcMap).Parse(template)
+	t, err := text_template.New("dump").Funcs(text_template.FuncMap{
+		"objectToYaml": func(obj runtime.Object) string {
+			s, err := marshalYaml(obj)
+			if err != nil {
+				glog.Errorf("unexpected error converting object to yaml: %v", err)
+			}
+			return s
+		},
+	}).Parse(template)
+
 	if err != nil {
 		return errors.Wrap(err, "unexpected error parsing template")
 	}
 
 	for objectType, result := range newMappingFactoring() {
 		if skipType(objectType, skipTypes) {
+			glog.Warningf("skipping type %v", objectType)
 			continue
 		}
 
@@ -303,27 +286,18 @@ func dumpNamespace(kubeClient *client.Clientset, ns, output string, skipTypes []
 	return ioutil.WriteFile(path, tmplBuf.Bytes(), 0644)
 }
 
-// skipType helper that allows to skip a
+// skipType returns true if a slice contains an element with a particular name
 func skipType(skip string, names []string) bool {
 	for _, name := range names {
 		if skip == name {
-			glog.Warningf("skipping type %v", skip)
 			return true
 		}
 	}
 	return false
 }
 
-func objectToYaml(obj runtime.Object) string {
-	s, err := marshalYaml(obj)
-	if err != nil {
-		glog.Errorf("unexpected error converting object to yaml: %v", err)
-	}
-	return s
-}
-
-// marshalYaml converts an instance of Object interface
-// to a yaml representation, removing the field resourceVersion
+// marshalYaml converts an instance of Object interface to a yaml representation
+// removing the field resourceVersion
 func marshalYaml(obj runtime.Object) (string, error) {
 	printer := &kubectl.YAMLPrinter{}
 	tmplBuf := new(bytes.Buffer)
