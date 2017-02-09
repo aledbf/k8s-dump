@@ -200,7 +200,7 @@ func newMappingFactoring() map[string]*k8sObject {
 			Runtime: &autoscalingapiv1.HorizontalPodAutoscalerList{},
 		},
 		"ingresses": &k8sObject{
-			Kind:    "HorizontalPodAutoscaler",
+			Kind:    "Ingress",
 			Runtime: &extensions.IngressList{},
 		},
 		"jobs": &k8sObject{
@@ -247,6 +247,10 @@ func newMappingFactoring() map[string]*k8sObject {
 			Kind:    "Service",
 			Runtime: &api.ServiceList{},
 		},
+		"secrets": &k8sObject{
+			Kind:    "Secret",
+			Runtime: &api.SecretList{},
+		},
 		"statefulsets": &k8sObject{
 			Kind:    "StatefulSet",
 			Runtime: &apps.StatefulSetList{},
@@ -263,7 +267,7 @@ func newMappingFactoring() map[string]*k8sObject {
 }
 
 var (
-	regex = regexp.MustCompile("(\\s*)resourceVersion: \"(\\d+)\"")
+	regex = regexp.MustCompile("(\\s*)resourceVersion: \"(\\d+)\"|(\\s*)ExternalName: \"\"")
 )
 
 type k8sObject struct {
@@ -322,7 +326,7 @@ func dumpNamespace(kubeClient *client.Clientset, ns, output string, skipTypes []
 			apiVersion = "extensions/v1beta1"
 		default:
 			rc = kubeClient.Core().RESTClient()
-			apiVersion = "api/v1"
+			apiVersion = "v1"
 		}
 
 		err = rc.Get().
@@ -372,12 +376,21 @@ func skipType(skip string, names []string) bool {
 func marshalYaml(kind, apiVersion string, obj runtime.Object) (string, error) {
 	printer := &YAMLPrinter{}
 	tmplBuf := new(bytes.Buffer)
+
+	tmplBuf.Write([]byte(fmt.Sprintf("apiVersion: %v\n", apiVersion)))
+	tmplBuf.Write([]byte(fmt.Sprintf("kind: %v\n", kind)))
+
+	if ing, ok := obj.(*extensions.Ingress); ok {
+		ing.Status = extensions.IngressStatus{}
+	}
+	if svc, ok := obj.(*api.Service); ok {
+		svc.Status = api.ServiceStatus{}
+	}
+
 	err := printer.PrintObj(obj, tmplBuf)
 	if err != nil {
 		return "", err
 	}
 
-	tmplBuf.Write([]byte(fmt.Sprintf("kind: %v\n", kind)))
-	tmplBuf.Write([]byte(fmt.Sprintf("apiVersion: %v\n", apiVersion)))
 	return regex.ReplaceAllString(tmplBuf.String(), ""), nil
 }
