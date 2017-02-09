@@ -148,7 +148,11 @@ func dumpCluster(kubeClient *client.Clientset, output, namespace string, skipTyp
 
 	glog.Infof("Dumping cluster objects...")
 	if namespace != "" {
-		dumpNamespace(kubeClient, namespace, output, skipTypes)
+		err := dumpNamespace(kubeClient, namespace, output, skipTypes)
+		if err != nil {
+			glog.Fatalf("unexpected error obtaining information about the namespaces: %v", err)
+		}
+
 		glog.Infof("done")
 		os.Exit(0)
 	}
@@ -202,12 +206,15 @@ func newMappingFactoring() map[string]runtime.Object {
 }
 
 var (
+	regex = regexp.MustCompile("(\\s*)resourceVersion: \"(\\d+)\"")
+
 	funcMap = text_template.FuncMap{
 		"objectToYaml": objectToYaml,
 	}
 )
 
-// dumpNamespace extracts information about Kubernetes object.
+// dumpNamespace extracts information about Kubernetes objects
+//
 // The types are:
 //  configmaps
 //  daemonsets
@@ -231,14 +238,14 @@ var (
 //  storageclasses
 //  thirdpartyresources
 //
-//
 func dumpNamespace(kubeClient *client.Clientset, ns, output string, skipTypes []string) error {
 	glog.Infof("\tdumping namespace %v", ns)
-	content := make(map[string]interface{}, 22)
-	data := make(map[string]interface{}, 22)
+
+	content := make(map[string]interface{})
+	data := make(map[string]interface{})
 	notFound := []string{}
 
-	t, err := text_template.New("dump.tmpl").Funcs(funcMap).Parse(template)
+	t, err := text_template.New("dump").Funcs(funcMap).Parse(template)
 	if err != nil {
 		return errors.Wrap(err, "unexpected error parsing template")
 	}
@@ -265,7 +272,7 @@ func dumpNamespace(kubeClient *client.Clientset, ns, output string, skipTypes []
 			rc = kubeClient.Core().RESTClient()
 		}
 
-		err := rc.Get().
+		err = rc.Get().
 			Namespace(ns).
 			Resource(objectType).
 			VersionedParams(&api.ListOptions{}, api.ParameterCodec).
@@ -274,10 +281,9 @@ func dumpNamespace(kubeClient *client.Clientset, ns, output string, skipTypes []
 
 		if err != nil {
 			if !k8s_errors.IsNotFound(err) {
-				return errors.Wrap(err, "unexpected error queryng type")
+				return errors.Wrap(err, "unexpected error querying type")
 			}
-
-			notFound = append(notFound, fmt.Sprintf("there is no objects of type %v in namespace %v", objectType, ns))
+			notFound = append(notFound, fmt.Sprintf("there is no object of type %v in namespace %v", objectType, ns))
 		}
 
 		data[objectType] = result
@@ -297,10 +303,11 @@ func dumpNamespace(kubeClient *client.Clientset, ns, output string, skipTypes []
 	return ioutil.WriteFile(path, tmplBuf.Bytes(), 0644)
 }
 
-func skipType(name string, typesToSkip []string) bool {
-	for _, st := range typesToSkip {
-		if name == st {
-			glog.Warningf("skipping type %v", name)
+// skipType helper that allows to skip a
+func skipType(skip string, names []string) bool {
+	for _, name := range names {
+		if skip == name {
+			glog.Warningf("skipping type %v", skip)
 			return true
 		}
 	}
@@ -315,10 +322,8 @@ func objectToYaml(obj runtime.Object) string {
 	return s
 }
 
-var (
-	regex = regexp.MustCompile("(\\s*)resourceVersion: \"(\\d+)\"")
-)
-
+// marshalYaml converts an instance of Object interface
+// to a yaml representation, removing the field resourceVersion
 func marshalYaml(obj runtime.Object) (string, error) {
 	printer := &kubectl.YAMLPrinter{}
 	tmplBuf := new(bytes.Buffer)
