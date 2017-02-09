@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"regexp"
+	"sync"
 	text_template "text/template"
 
 	"github.com/golang/glog"
@@ -151,17 +153,25 @@ func dumpCluster(kubeClient *client.Clientset, output, namespace string, skipTyp
 		os.Exit(0)
 	}
 
+	var wg sync.WaitGroup
 	for _, ns := range nss.Items {
 		if ns.Status.Phase == api.NamespaceTerminating {
 			glog.Infof("skiping namespace %v (is being terminated)", ns.Name)
 			continue
 		}
 
-		err := dumpNamespace(kubeClient, ns.Name, output, skipTypes)
-		if err != nil {
-			glog.Fatalf("unexpected error dumping namespace (%v) content: %v", ns.Name, err)
-		}
+		wg.Add(1)
+		name := ns.Name
+		go func() {
+			err := dumpNamespace(kubeClient, name, output, skipTypes)
+			if err != nil {
+				glog.Fatalf("unexpected error dumping namespace (%v) content: %v", name, err)
+			}
+			wg.Done()
+		}()
 	}
+
+	wg.Wait()
 	glog.Infof("done")
 }
 
@@ -305,6 +315,10 @@ func objectToYaml(obj runtime.Object) string {
 	return s
 }
 
+var (
+	regex = regexp.MustCompile("(\\s*)resourceVersion: \"(\\d+)\"")
+)
+
 func marshalYaml(obj runtime.Object) (string, error) {
 	printer := &kubectl.YAMLPrinter{}
 	tmplBuf := new(bytes.Buffer)
@@ -312,5 +326,6 @@ func marshalYaml(obj runtime.Object) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return tmplBuf.String(), nil
+
+	return regex.ReplaceAllString(tmplBuf.String(), ""), nil
 }
