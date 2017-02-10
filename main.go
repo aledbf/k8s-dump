@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"os"
 	"regexp"
+	"strings"
 	"sync"
 	text_template "text/template"
 
@@ -25,6 +26,7 @@ import (
 	restclient "k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
 	clientcmdapi "k8s.io/kubernetes/pkg/client/unversioned/clientcmd/api"
+	"k8s.io/kubernetes/pkg/conversion"
 	"k8s.io/kubernetes/pkg/runtime"
 )
 
@@ -40,6 +42,7 @@ func main() {
 		skipTypes      = flags.StringSlice("skip-types", []string{"serviceaccount"}, "Types to skip in the dump. ")
 		output         = flags.String("output", "", "Directory where the dump files should be created.")
 		namespace      = flags.String("namespace", "", "Only dump the contents of a particular namespace.")
+		skipNames      = flags.StringSlice("skip-names", []string{}, "Skip objects that fulfill the regex.")
 	)
 
 	flags.AddGoFlagSet(flag.CommandLine)
@@ -52,7 +55,7 @@ func main() {
 		handleFatalInitError(err)
 	}
 
-	dumpCluster(kubeClient, *output, *namespace, *skipTypes)
+	dumpCluster(kubeClient, *output, *namespace, *skipNames, *skipTypes)
 }
 
 const (
@@ -138,15 +141,21 @@ func handleFatalInitError(err error) {
 
 // dump extracts information from a Kubernetes cluster and creates multiple
 // files (one per namespace) with the content
-func dumpCluster(kubeClient *client.Clientset, output, namespace string, skipTypes []string) {
+func dumpCluster(kubeClient *client.Clientset, output, namespace string, skipNames, skipTypes []string) {
 	nss, err := kubeClient.Namespaces().List(api.ListOptions{})
 	if err != nil {
 		glog.Fatalf("unexpected error obtaining information about the namespaces: %v", err)
 	}
 
+	var skipNamesRegex *regexp.Regexp
+
+	if len(skipNames) > 0 {
+		skipNamesRegex = regexp.MustCompile(strings.Join(skipNames, "|"))
+	}
+
 	glog.Infof("Dumping cluster objects...")
 	if namespace != "" {
-		err := dumpNamespace(kubeClient, namespace, output, skipTypes)
+		err := dumpNamespace(kubeClient, namespace, output, skipNamesRegex, skipTypes)
 		if err != nil {
 			glog.Fatalf("unexpected error obtaining information about the namespaces: %v", err)
 		}
@@ -165,7 +174,7 @@ func dumpCluster(kubeClient *client.Clientset, output, namespace string, skipTyp
 		wg.Add(1)
 		name := ns.Name
 		go func() {
-			err := dumpNamespace(kubeClient, name, output, skipTypes)
+			err := dumpNamespace(kubeClient, name, output, skipNamesRegex, skipTypes)
 			if err != nil {
 				glog.Fatalf("unexpected error dumping namespace (%v) content: %v", name, err)
 			}
@@ -278,7 +287,7 @@ type k8sObject struct {
 
 // dumpNamespace extracts information about Kubernetes objects located in a
 // particular namespace.
-func dumpNamespace(kubeClient *client.Clientset, ns, output string, skipTypes []string) error {
+func dumpNamespace(kubeClient *client.Clientset, ns, output string, skipNames *regexp.Regexp, skipTypes []string) error {
 	glog.Infof("\tdumping namespace %v", ns)
 
 	content := make(map[string]interface{})
@@ -287,7 +296,7 @@ func dumpNamespace(kubeClient *client.Clientset, ns, output string, skipTypes []
 
 	t, err := text_template.New("dump").Funcs(text_template.FuncMap{
 		"objectToYaml": func(kind, apiVersion string, obj runtime.Object) string {
-			s, err := marshalYaml(kind, apiVersion, obj)
+			s, err := marshalYaml(kind, apiVersion, obj, skipNames)
 			if err != nil {
 				glog.Errorf("unexpected error converting object to yaml: %v", err)
 			}
@@ -371,9 +380,24 @@ func skipType(skip string, names []string) bool {
 	return false
 }
 
+func objectMetaFor(obj runtime.Object) (*api.ObjectMeta, error) {
+	v, err := conversion.EnforcePtr(obj)
+	if err != nil {
+		return nil, err
+	}
+	var meta *api.ObjectMeta
+	err = runtime.FieldPtr(v, "ObjectMeta", &meta)
+	return meta, err
+}
+
 // marshalYaml converts an instance of Object interface to a yaml representation
 // removing the field resourceVersion
-func marshalYaml(kind, apiVersion string, obj runtime.Object) (string, error) {
+func marshalYaml(kind, apiVersion string, obj runtime.Object, skipNames *regexp.Regexp) (string, error) {
+	meta, _ := objectMetaFor(obj)
+	if skipNames != nil && skipNames.MatchString(meta.GetName()) {
+		return "", nil
+	}
+
 	printer := &YAMLPrinter{}
 	tmplBuf := new(bytes.Buffer)
 
