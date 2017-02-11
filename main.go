@@ -15,14 +15,15 @@ import (
 	"github.com/pkg/errors"
 	"github.com/spf13/pflag"
 
-	"k8s.io/kubernetes/pkg/api"
+	unversioned_api "k8s.io/kubernetes/pkg/api"
 	k8s_errors "k8s.io/kubernetes/pkg/api/errors"
+	api "k8s.io/kubernetes/pkg/api/v1"
 	apps "k8s.io/kubernetes/pkg/apis/apps/v1beta1"
 	autoscalingapiv1 "k8s.io/kubernetes/pkg/apis/autoscaling/v1"
 	batch "k8s.io/kubernetes/pkg/apis/batch/v2alpha1"
-	"k8s.io/kubernetes/pkg/apis/extensions"
+	extensions "k8s.io/kubernetes/pkg/apis/extensions/v1beta1"
 	storage "k8s.io/kubernetes/pkg/apis/storage/v1beta1"
-	client "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
+	client "k8s.io/kubernetes/pkg/client/clientset_generated/release_1_5"
 	restclient "k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
 	clientcmdapi "k8s.io/kubernetes/pkg/client/unversioned/clientcmd/api"
@@ -42,7 +43,7 @@ func main() {
 		skipTypes      = flags.StringSlice("skip-types", []string{"serviceaccount"}, "Types to skip in the dump. ")
 		output         = flags.String("output", "", "Directory where the dump files should be created.")
 		namespace      = flags.String("namespace", "", "Only dump the contents of a particular namespace.")
-		skipNames      = flags.StringSlice("skip-names", []string{}, "Skip objects that fulfill the regex.")
+		skipNames      = flags.StringSlice("skip-names", []string{"kubernetes"}, "Skip objects that fulfill the regex.")
 	)
 
 	flags.AddGoFlagSet(flag.CommandLine)
@@ -341,7 +342,7 @@ func dumpNamespace(kubeClient *client.Clientset, ns, output string, skipNames *r
 		err = rc.Get().
 			Namespace(ns).
 			Resource(objectType).
-			VersionedParams(&api.ListOptions{}, api.ParameterCodec).
+			VersionedParams(&api.ListOptions{}, unversioned_api.ParameterCodec).
 			Do().
 			Into(result.Runtime)
 
